@@ -14,6 +14,11 @@ import PIL
 from PIL import Image
 import logging
 import datetime
+import threading
+from queue import Queue
+
+
+
 
 def time_now():
     now = datetime.datetime.now()
@@ -41,11 +46,14 @@ logging.info("Session begun.")
 
 app=Tk()
 
+
 pad=3
 app.geometry("{0}x{1}+0+0".format(app.winfo_screenwidth()-3, app.winfo_screenheight()-3))
 
 app.winfo_toplevel().title("Nematode Imaging GUI")
 app.option_add("*Label.Width", 7)
+
+stop_threads = False
 
 A1_temp = IntVar()
 A3_temp = IntVar()
@@ -69,11 +77,48 @@ fanspeed = IntVar()
 fan_state = StringVar()
 fan_state.set("Off")
 
-test_perHour = IntVar()
+test_scanDelay = IntVar()
+test_time_remaining = StringVar()
 test_length = IntVar()
 test_time = IntVar()
 test_state = StringVar()
 
+def timer(length):
+    time_start = time.time()
+    seconds = 0
+        
+    while (seconds < length):
+        global stop_threads 
+        if stop_threads: 
+            break
+        time.sleep(1)
+        seconds = int(time.time() - time_start)
+
+        t = length - seconds
+        hr = t//3600
+        m =  (t-3600*hr)//60
+        s =  t%60
+
+        test_time_remaining.set(str(hr)+" : "+str(m)+" : "+str(s))
+
+    return
+
+
+def perform_test():
+    global stop_threads
+    stop_threads = False
+    
+    
+    #def test_functions():
+        #loop - this entire thing needs a thread - perform after popping one timer(), run as many times as scans will occur
+        #   push a scan
+        #   file handle
+        #   crop all 12 images
+        #   if sufficient number of scans has been completed to count worms (2? 3? 4?), update dead worm count per device
+
+    timer_thread = threading.Thread(target = lambda: timer(test_scanDelay.get()*60*test_length.get()))
+    timer_thread.daemon = True
+    timer_thread.start()
 
 
 def clear_data():
@@ -98,12 +143,15 @@ def clear_data():
     fanspeed.set(0)
     fan_state.set("Off")
 
-    test_perHour.set(0)
+    test_scanDelay.set(0)
     test_length.set(0)
     test_time.set(0)
+    test_time_remaining.set("-")
     test_state.set("No")
 
     logging.info("Data cleared to zero.")
+    global stop_threads
+    stop_threads = True
     
 
 
@@ -116,25 +164,34 @@ def set_test():
             ClearButton.config(state="disabled")
             test_state.set("Yes")
 
-            test_perHour.set(frequency.get())
-            test_length.set(hours.get())
-            test_time.set(hours.get())
+            test_scanDelay.set(scan_delay.get())
+            test_length.set(scan_num.get())
+            
             app.update_idletasks
             set_test_window.destroy()
             logging.info("Test begun.")
+            
+            t = test_scanDelay.get()*60*test_length.get()
+            hr = t//3600
+            m =  (t-3600*hr)//60
+            s =  t%60
+
+            test_time_remaining.set(str(hr)+" : "+str(m)+" : "+str(s))
+            
+            perform_test()
 
     
     set_test_window = Toplevel(app)
     set_test_window.geometry("{0}x{1}+0+0".format(set_test_window.winfo_screenwidth()-3, set_test_window.winfo_screenheight()-3))
     set_test_window.option_add("*Label.Width", 30)
 
-    Label(set_test_window, text="Imaging Frequency (per Hour)").grid(row=0, column=0)
-    frequency = Scale(set_test_window, from_=1, to=60, orient="horizontal")
-    frequency.grid(row=0, column=1)
+    Label(set_test_window, text="Scan every X minutes").grid(row=0, column=0)
+    scan_delay = Scale(set_test_window, from_=5, to=60, orient="horizontal")
+    scan_delay.grid(row=0, column=1)
 
-    Label(set_test_window, text="Length of Test (Hours)").grid(row=1, column=0)
-    hours = Scale(set_test_window, from_=1, to=24, orient="horizontal")
-    hours.grid(row=1, column=1)
+    Label(set_test_window, text="Number of Scans").grid(row=1, column=0)
+    scan_num = Scale(set_test_window, from_=1, to=60, orient="horizontal")
+    scan_num.grid(row=1, column=1)
     
     Button(set_test_window, text="Confirm", command=ask).grid(row=2, column=0)
 
@@ -142,7 +199,13 @@ def set_test():
 
     
 
+
     
+    
+    
+  
+    
+
 
 
 def stop_test():
@@ -152,14 +215,24 @@ def stop_test():
             ClearButton.config(state="active")
             test_state.set("No")
             logging.info("Test stopped.")
+            global stop_threads
+            stop_threads = True
 
 
 def ask_clear_data():
     if (messagebox.askyesno("Stop Test Tilte", "Are you sure you want to clear current data?") is True):
         clear_data()
 
-    
-
+#account for deleting window
+def _delete_window():
+    global stop_threads
+    if (test_state.get() == "Yes"):
+        messagebox.showwarning(" ","Cannot close while test is running")
+    else:
+        stop_threads = True
+        app.destroy()
+        
+app.protocol("WM_DELETE_WINDOW", _delete_window)
 
     
 #Set original values to zero
@@ -238,14 +311,14 @@ StopTestButton.grid(row=3, column=6, rowspan=2)
 Label(app, text="Testing:", anchor="e").grid(row=5, column=5)
 Label(app, textvariable=test_state, anchor="w").grid(row=5, column=6)
 
-Label(app, text="Total Hrs:", anchor="e").grid(row=6, column=5)
-Label(app, textvariable=test_length, anchor="w").grid(row=6, column=6)
+Label(app, text="m p scan:", anchor="e").grid(row=6, column=5)
+Label(app, textvariable=test_scanDelay, anchor="w").grid(row=6, column=6)
 
-Label(app, text="Per Hr:", anchor="e").grid(row=7, column=5)
-Label(app, textvariable=test_perHour, anchor="w").grid(row=7,column=6)
+Label(app, text="num of scans:", anchor="e").grid(row=7, column=5)
+Label(app, textvariable=test_length, anchor="w").grid(row=7,column=6)
 
-Label(app, text="Hrs left:", anchor="e").grid(row=8, column=5)
-Label(app, textvariable=test_time, anchor="w").grid(row=8, column=6)
+Label(app, text="Time left:", anchor="e").grid(row=8, column=5)
+Label(app, textvariable=test_time_remaining, anchor="w").grid(row=8, column=6, columnspan=5, sticky="w")
 
 ClearButton = Button(app, text="Clear Data", command=ask_clear_data)
 ClearButton.grid(row=9, column=2)
@@ -260,4 +333,6 @@ if (test_state.get() == "Yes"):
 
 logging.info("Session ended.")
 logger_file.close()
+
+stop_threads = True
 
